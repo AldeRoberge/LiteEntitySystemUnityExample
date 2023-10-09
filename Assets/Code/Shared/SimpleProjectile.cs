@@ -4,7 +4,7 @@ using UnityEngine;
 
 namespace Code.Shared
 {
-    [UpdateableEntity(true)]
+    [UpdateableEntity]
     public class SimpleProjectile : EntityLogic
     {
         [SyncVarFlags(SyncFlags.Interpolated)]
@@ -12,35 +12,18 @@ namespace Code.Shared
         public SyncVar<Vector2> ShooterPos;
         public SyncVar<Vector2> Speed;
         public SyncVar<byte> ShooterPlayerId;
-
-        public Vector2 VisualPostion;
         
         private Rigidbody2D _rigidbody;
         private BoxCollider2D _collider;
         private UnityPhysicsManager _unityPhys;
         public GameObject UnityObject;
-
-        private float _spawnLerp = 0f;
-        private Vector3 _prevPos;
         private float _lifeTime = 2f;
 
         protected override void OnConstructed()
         {
             _unityPhys = EntityManager.GetSingleton<UnityPhysicsManager>();
-
-            if (EntityManager.IsClient && ShooterPlayerId != EntityManager.PlayerId)
-            {
-                _spawnLerp = 1f;
-                VisualPostion = ShooterPos;
-            }
-            else
-            {
-                VisualPostion = Position;
-            }
-            _prevPos = VisualPostion;
-            
             var prefab = Resources.Load<GameObject>(EntityManager.IsClient ? "ProjectileClient" : "ProjectileServer");
-            UnityObject = Object.Instantiate(prefab, VisualPostion, Quaternion.identity, _unityPhys.Root);
+            UnityObject = Object.Instantiate(prefab, ShooterPos.Value, Quaternion.identity, _unityPhys.Root);
             UnityObject.name = $"Projectile_{Id}";
             UnityObject.GetComponent<SimpleProjectileView>().Attached = this;
         }
@@ -68,31 +51,13 @@ namespace Code.Shared
 
         public override void Update()
         {
-            _prevPos = Position.Value;
-            if (IsLocal || EntityManager.IsServer)
+            Position += Speed.Value * EntityManager.DeltaTimeF;
+            _lifeTime -= EntityManager.DeltaTimeF;
+            if (_lifeTime <= 0f)
             {
-                Position += Speed.Value * EntityManager.DeltaTimeF;
-                _lifeTime -= EntityManager.DeltaTimeF;
-                if (EntityManager.IsServer && _lifeTime <= 0f)
-                {
-                    Destroy();
-                }
+                Destroy();
             }
             //_rigidbody.position = Position;
-        }
-
-        public override void VisualUpdate()
-        {
-            var visualPos = Vector2.Lerp(_prevPos, Position, EntityManager.LerpFactor);
-            if (_spawnLerp > 0f)
-            {
-                _spawnLerp -= (float)EntityManager.VisualDeltaTime;
-                VisualPostion = Vector2.Lerp(ShooterPos, visualPos, 1f - _spawnLerp);
-            }
-            else
-            {
-                VisualPostion = visualPos;
-            }
         }
     }
 }

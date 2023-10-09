@@ -8,7 +8,7 @@ namespace Code.Shared
 
         private void Update()
         {
-            transform.position = Attached.VisualPostion;
+            transform.position = Attached.Position.Value;
         }
     }
 }
