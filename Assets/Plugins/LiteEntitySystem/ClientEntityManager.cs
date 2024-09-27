@@ -112,10 +112,10 @@ namespace LiteEntitySystem
         private readonly SequenceBinaryHeap<ServerStateData> _readyStates = new(MaxSavedStateDiff);
         private readonly Queue<InputCommand> _inputCommands = new (InputBufferSize);
         private readonly Queue<byte[]> _inputPool = new (InputBufferSize);
-        private readonly Queue<(ushort id, EntityLogic entity)> _spawnPredictedEntities = new ();
+        private readonly Queue<(ushort tick, EntityLogic entity)> _spawnPredictedEntities = new ();
         private readonly byte[][] _interpolatedInitialData = new byte[MaxEntityCount][];
         private readonly byte[][] _interpolatePrevData = new byte[MaxEntityCount][];
-        private readonly byte[][] _predictedEntitiesData = new byte[MaxSyncedEntityCount][];
+        private readonly byte[][] _predictedEntitiesData = new byte[MaxEntityCount][];
         private readonly byte[] _sendBuffer = new byte[NetConstants.MaxPacketSize];
 
         private ServerSendRate _serverSendRate;
@@ -458,7 +458,7 @@ namespace LiteEntitySystem
             //reset owned entities
             foreach (var entity in _predictedEntityFilter)
             {
-                ref readonly var classData = ref entity.GetClassData();
+                ref readonly var classData = ref entity.ClassData;
                 if(entity.IsRemoteControlled && !classData.HasRemoteRollbackFields)
                     continue;
 
@@ -523,7 +523,7 @@ namespace LiteEntitySystem
                 if(entity.IsLocal || !entity.IsLocalControlled)
                     continue;
                 
-                ref readonly var classData = ref entity.GetClassData();
+                ref readonly var classData = ref entity.ClassData;
                 for(int i = 0; i < classData.InterpolatedCount; i++)
                 {
                     fixed (byte* currentDataPtr = _interpolatedInitialData[entity.Id])
@@ -537,7 +537,7 @@ namespace LiteEntitySystem
             //delete predicted
             while (_spawnPredictedEntities.TryPeek(out var info))
             {
-                if (Utils.SequenceDiff(_stateA.ProcessedTick, info.id) >= 0)
+                if (Utils.SequenceDiff(_stateA.ProcessedTick, info.tick) >= 0)
                 {
                     _spawnPredictedEntities.Dequeue();
                     info.entity.DestroyInternal();
@@ -666,7 +666,7 @@ namespace LiteEntitySystem
                 if (!entity.IsLocalControlled && !entity.IsLocal)
                     continue;
                 
-                ref readonly var classData = ref entity.GetClassData();
+                ref readonly var classData = ref entity.ClassData;
                 fixed (byte* currentDataPtr = _interpolatedInitialData[entity.Id], prevDataPtr = _interpolatePrevData[entity.Id])
                 {
                     for(int i = 0; i < classData.InterpolatedCount; i++)
@@ -755,20 +755,39 @@ namespace LiteEntitySystem
 
         internal void AddOwned(EntityLogic entity)
         {
-            var flags = entity.GetClassData().Flags;
+            var flags = entity.ClassData.Flags;
             if (flags.HasFlagFast(EntityFlags.Updateable) && !flags.HasFlagFast(EntityFlags.UpdateOnClient))
                 AliveEntities.Add(entity);
         }
         
         internal void RemoveOwned(EntityLogic entity)
         {
-            var flags = entity.GetClassData().Flags;
+            var flags = entity.ClassData.Flags;
             if (flags.HasFlagFast(EntityFlags.Updateable) && !flags.HasFlagFast(EntityFlags.UpdateOnClient))
                 AliveEntities.Remove(entity);
         }
 
-        internal void AddPredictedInfo(EntityLogic e) =>
-            _spawnPredictedEntities.Enqueue((_tick, e));
+        internal T AddPredictedEntity<T>(Action<T> initMethod) where T : EntityLogic
+        {
+            ushort classId = EntityClassInfo<T>.ClassId;
+            if (classId >= ClassDataDict.Length)
+               throw new Exception($"Unregistered entity class: {classId} - {typeof(T)}");
+            var classData = ClassDataDict[classId];
+            if (classData.EntityConstructor == null)
+               throw new Exception($"Unregistered entity class constructor: {classId} - {typeof(T)}");
+
+            var entity = (T)classData.EntityConstructor(new EntityParams(
+               classId,
+               LocalEntityId,
+               0,
+               TotalTicksPassed,
+               this));
+            entity.InternalOwnerId.Value = InternalPlayerId;
+            initMethod?.Invoke(entity);
+            ConstructEntity(entity);
+            _spawnPredictedEntities.Enqueue((_tick, entity));
+            return entity;
+        }
 
         private void ExecuteSyncCalls(SyncCallInfo[] callInfos, ref int count)
         {
@@ -851,7 +870,7 @@ namespace LiteEntitySystem
                     if (entity == null) //create new
                     {
                         entity = AddEntity(new EntityParams(entityDataHeader, this));
-                        classData = ref entity.GetClassData();
+                        classData = ref entity.ClassData;
                         if (classData.PredictedSize > 0 || classData.SyncableFields.Length > 0)
                         {
                             Utils.ResizeOrCreate(ref _predictedEntitiesData[entity.Id], classData.PredictedSize);
@@ -868,7 +887,7 @@ namespace LiteEntitySystem
                     }
                     else //update "old"
                     {
-                        classData = ref entity.GetClassData();
+                        classData = ref entity.ClassData;
                         writeInterpolationData = entity.IsRemoteControlled;
                     }
                 }
@@ -881,7 +900,7 @@ namespace LiteEntitySystem
                     entity = EntitiesDict[entityId];
                     if(entity != null)
                     {
-                        classData = ref entity.GetClassData();
+                        classData = ref entity.ClassData;
                         writeInterpolationData = entity.IsRemoteControlled;
                         readerPosition += classData.FieldsFlagsSize;
                     }
@@ -946,9 +965,9 @@ namespace LiteEntitySystem
 
             bool IsEntityIdValid(ushort id)
             {
-                if (id == InvalidEntityId || id >= MaxSyncedEntityCount)
+                if (id == InvalidEntityId || id == LocalEntityId)
                 {
-                    Logger.LogError($"Bad data (id > {MaxSyncedEntityCount} or Id == 0) Id: {id}");
+                    Logger.LogError($"Bad data (id == {InvalidEntityId} or Id == {LocalEntityId}) Id: {id}");
                     return false;
                 }
                 return true;

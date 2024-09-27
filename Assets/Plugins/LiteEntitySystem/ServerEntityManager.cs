@@ -38,14 +38,14 @@ namespace LiteEntitySystem
     {
         public const int MaxStoredInputs = 30;
         
-        private readonly IdGeneratorUShort _entityIdQueue = new(1, MaxSyncedEntityCount);
+        private readonly IdGeneratorUShort _entityIdQueue = new(1, MaxEntityCount);
         private readonly IdGeneratorByte _playerIdQueue = new(1, MaxPlayers);
         private readonly Queue<RemoteCallPacket> _rpcPool = new();
         private readonly Queue<byte[]> _inputPool = new();
         private readonly Queue<byte[]> _pendingClientRequests = new();
         private byte[] _packetBuffer = new byte[(MaxParts+1) * NetConstants.MaxPacketSize + StateSerializer.MaxStateSize];
         private readonly SparseMap<NetPlayer> _netPlayers = new (MaxPlayers+1);
-        private readonly StateSerializer[] _stateSerializers = new StateSerializer[MaxSyncedEntityCount];
+        private readonly StateSerializer[] _stateSerializers = new StateSerializer[MaxEntityCount];
         private readonly byte[] _inputDecodeBuffer = new byte[NetConstants.MaxUnreliableDataSize];
         private readonly NetDataReader _requestsReader = new();
         
@@ -241,7 +241,7 @@ namespace LiteEntitySystem
             Add(initMethod);
 
         /// <summary>
-        /// Add new entity
+        /// Add new singleton
         /// </summary>
         /// <param name="initMethod">Method that will be called after entity construction</param>
         /// <typeparam name="T">Entity type</typeparam>
@@ -552,34 +552,26 @@ namespace LiteEntitySystem
             
             //create entity data and filters
             ref var classData = ref ClassDataDict[EntityClassInfo<T>.ClassId];
-            T entity;
-            
-            if (classData.Flags.HasFlagFast(EntityFlags.LocalOnly))
+            if (_entityIdQueue.AvailableIds == 0)
             {
-                entity = AddLocalEntity(initMethod);
+                Logger.Log($"Cannot add entity. Max entity count reached: {MaxEntityCount}");
+                return null;
             }
-            else
-            {
-                if (_entityIdQueue.AvailableIds == 0)
-                {
-                    Logger.Log($"Cannot add entity. Max entity count reached: {MaxSyncedEntityCount}");
-                    return null;
-                }
-                ushort entityId = _entityIdQueue.GetNewId();
-                ref var stateSerializer = ref _stateSerializers[entityId];
+            ushort entityId = _entityIdQueue.GetNewId();
+            ref var stateSerializer = ref _stateSerializers[entityId];
 
-                stateSerializer.AllocateMemory(ref classData);
-                entity = (T)AddEntity(new EntityParams(
-                    classData.ClassId, 
-                    entityId,
-                    stateSerializer.NextVersion,
-                    TotalTicksPassed,
-                    this));
-                stateSerializer.Init(entity, _tick);
-                initMethod?.Invoke(entity);
-                ConstructEntity(entity);
-                _changedEntities.Add(entity);
-            }
+            stateSerializer.AllocateMemory(ref classData);
+            var entity = (T)AddEntity(new EntityParams(
+                classData.ClassId, 
+                entityId,
+                stateSerializer.NextVersion,
+                TotalTicksPassed,
+                this));
+            stateSerializer.Init(entity, _tick);
+            initMethod?.Invoke(entity);
+            ConstructEntity(entity);
+            _changedEntities.Add(entity);
+            
             //Debug.Log($"[SEM] Entity create. clsId: {classData.ClassId}, id: {entityId}, v: {version}");
             return entity;
         }

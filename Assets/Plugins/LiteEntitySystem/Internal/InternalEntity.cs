@@ -110,10 +110,9 @@ namespace LiteEntitySystem.Internal
         /// <summary>
         /// Is locally created entity
         /// </summary>
-        public bool IsLocal => Id >= EntityManager.MaxSyncedEntityCount;
+        public bool IsLocal => Id == EntityManager.LocalEntityId;
         
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal ref EntityClassData GetClassData() => ref EntityManager.ClassDataDict[ClassId];
+        internal ref EntityClassData ClassData => ref EntityManager.ClassDataDict[ClassId];
 
         /// <summary>
         /// Destroy entity
@@ -195,7 +194,7 @@ namespace LiteEntitySystem.Internal
 
         internal void RegisterRpcInternal()
         {
-            ref var classData = ref GetClassData();
+            ref var classData = ref ClassData;
             
             //setup field ids for BindOnChange and pass on server this for OnChangedEvent to StateSerializer
             var onChangeTarget = EntityManager.IsServer && !IsLocal ? this : null;
@@ -280,8 +279,12 @@ namespace LiteEntitySystem.Internal
                 return versionDiff;
             
             //local first because mostly this is unity physics or something similar
-            return (Id >= EntityManager.MaxSyncedEntityCount ? Id - ushort.MaxValue : Id) -
-                   (other.Id >= EntityManager.MaxSyncedEntityCount ? other.Id - ushort.MaxValue : other.Id);
+            if (IsLocal && !other.IsLocal)
+                return 1;
+            if (!IsLocal && other.IsLocal) 
+                return -1;
+            
+            return Id - other.Id;
         }
 
         public override int GetHashCode() => Id + Version * ushort.MaxValue;

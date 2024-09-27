@@ -146,16 +146,7 @@ namespace LiteEntitySystem.Internal
             LastChangedTick = tick;
             _fieldChangeTicks[fieldId] = tick;
             fixed (byte* data = &_latestEntityData[HeaderSize + _fields[fieldId].FixedOffset])
-            {
-                if (typeof(T) == typeof(EntitySharedReference))
-                {
-                    ref var sharedRef = ref Unsafe.As<T, EntitySharedReference>(ref newValue);
-                    //skip local ids
-                    *(EntitySharedReference*)data = sharedRef.IsLocal ? null : sharedRef;
-                }
-                else
-                    *(T*)data = newValue;
-            }
+                *(T*)data = newValue;
         }
 
         public void Destroy(ushort serverTick, bool instantly)
@@ -200,7 +191,7 @@ namespace LiteEntitySystem.Internal
             CleanPendingRpcs(ref _syncRpcHead, out _syncRpcTail);
             _rpcMode = RPCMode.Sync;
             _entity.OnSyncRequested();
-            var syncableFields = _entity.GetClassData().SyncableFields;
+            var syncableFields = _entity.ClassData.SyncableFields;
             for (int i = 0; i < syncableFields.Length; i++)
                 RefMagic.RefFieldValue<SyncableField>(_entity, syncableFields[i].Offset)
                     .OnSyncRequested();

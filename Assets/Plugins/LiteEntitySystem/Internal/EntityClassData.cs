@@ -65,6 +65,7 @@ namespace LiteEntitySystem.Internal
         
         private static readonly Type InternalEntityType = typeof(InternalEntity);
         private static readonly Type SingletonEntityType = typeof(SingletonEntityLogic);
+        private static readonly Type LocalSingletonType = typeof(LocalSingletonEntityLogic);
         private static readonly Type SyncableFieldType = typeof(SyncableField);
 
         public EntityClassData(ushort filterId, Type entType, RegisteredTypeInfo typeInfo)
@@ -82,7 +83,7 @@ namespace LiteEntitySystem.Internal
             Flags = 0;
             
             EntityConstructor = typeInfo.Constructor;
-            IsSingleton = entType.IsSubclassOf(SingletonEntityType);
+            IsSingleton = entType.IsSubclassOf(SingletonEntityType) || entType.IsSubclassOf(LocalSingletonType);
             FilterId = filterId;
             
             _baseTypes = Utils.GetBaseTypes(entType, InternalEntityType, false).ToArray();

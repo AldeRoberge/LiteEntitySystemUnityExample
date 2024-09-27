@@ -18,19 +18,9 @@ namespace LiteEntitySystem
         Updateable = 1 << 1,                    
         
         /// <summary>
-        /// Entity is local only without sync (only on server or client no difference)
-        /// </summary>
-        LocalOnly = 1 << 2,                     
-        
-        /// <summary>
         /// Sync entity only for owner player
         /// </summary>
-        OnlyForOwner = 1 << 3,    
-        
-        /// <summary>
-        /// Handle sync details before sending to player
-        /// </summary>
-        CustomSync = 1 << 4 
+        OnlyForOwner = 1 << 2
     }
     
     [AttributeUsage(AttributeTargets.Class)]
@@ -172,7 +162,7 @@ namespace LiteEntitySystem
         /// <typeparam name="T">Entity type</typeparam>
         /// <param name="initMethod">Method that will be called after entity constructed</param>
         /// <returns>Created predicted local entity</returns>
-        public T AddPredictedEntity<T>(Action<T> initMethod = null) where T : EntityLogic
+        public EntitySharedReference AddPredictedEntity<T>(Action<T> initMethod = null) where T : EntityLogic
         {
             if (EntityManager.IsServer)
             {
@@ -192,10 +182,7 @@ namespace LiteEntitySystem
 
                 return predictedEntity;
             }
-            
-            var entity = EntityManager.AddLocalEntity(initMethod);
-            ClientManager.AddPredictedInfo(entity);
-            return entity;
+            return ClientManager.AddPredictedEntity(initMethod);
         }
 
         /// <summary>
@@ -302,7 +289,7 @@ namespace LiteEntitySystem
         
         protected EntityLogic(EntityParams entityParams) : base(entityParams)
         {
-            ref readonly var classData = ref GetClassData();
+            ref readonly var classData = ref ClassData;
             _lagCompensatedSize = classData.LagCompensatedSize;
             if (_lagCompensatedSize > 0)
             {
