@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using LiteEntitySystem.Internal;
 
 namespace LiteEntitySystem
@@ -185,6 +186,13 @@ namespace LiteEntitySystem
         {
             if (IsDestroyed)
                 return;
+                
+            //temporary copy childs to array because childSet can be modified inside
+            var childsCopy = _childsSet?.ToArray();
+            if (childsCopy != null) //notify child entities about parent destruction
+                foreach (var entityLogic in childsCopy)
+                    entityLogic.OnBeforeParentDestroy();
+                
             base.DestroyInternal();
             var parent = EntityManager.GetEntityById<EntityLogic>(_parentId);
             if (parent != null && !parent.IsDestroyed && parent._childsSet != null)
@@ -196,6 +204,14 @@ namespace LiteEntitySystem
                 {
                     entityLogic.Destroy();
                 }
+        }
+        
+        /// <summary>
+        /// Called before parent destroy
+        /// </summary>
+        protected virtual void OnBeforeParentDestroy()
+        {
+            
         }
         
         private void OnOwnerChange(byte prevOwner)
