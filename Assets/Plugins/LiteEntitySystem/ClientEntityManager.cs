@@ -128,7 +128,7 @@ namespace LiteEntitySystem
         private readonly SequenceBinaryHeap<ServerStateData> _readyStates = new(MaxSavedStateDiff);
         private readonly Queue<InputCommand> _inputCommands = new (InputBufferSize);
         private readonly Queue<byte[]> _inputPool = new (InputBufferSize);
-        private readonly Queue<(ushort tick, EntityLogic entity)> _spawnPredictedEntities = new ();
+        private readonly AVLTree<EntityLogic> _spawnPredictedEntities = new ();
         private readonly byte[] _sendBuffer = new byte[NetConstants.MaxPacketSize];
         private readonly IdGeneratorUShort _localIdQueue = new (MaxEntityCount+1, ushort.MaxValue);
 
@@ -138,6 +138,7 @@ namespace LiteEntitySystem
         private float _lerpTime;
         private double _timer;
         private bool _isSyncReceived;
+        private EntityClassData _tempEmptyData;
 
         private readonly struct SyncCallInfo
         {
@@ -159,9 +160,8 @@ namespace LiteEntitySystem
         private int _syncCallsCount;
         private SyncCallInfo[] _syncCallsBeforeConstruct;
         private int _syncCallsBeforeConstructCount;
-        
-        private InternalEntity[] _entitiesToConstruct = new InternalEntity[64];
-        private int _entitiesToConstructCount;
+
+        private readonly AVLTree<InternalEntity> _entitiesToConstruct = new();
         private ushort _lastReceivedInputTick;
         private float _logicLerpMsec;
         private ushort _lastReadyTick;
@@ -244,6 +244,8 @@ namespace LiteEntitySystem
         {
             base.RemoveEntity(e);
             _predictedEntityFilter.Remove(e);
+            //on client cleanup on remove
+            ClassDataDict[e.ClassId].ReleaseDataCache(e);
         }
 
         protected override unsafe void OnAliveEntityAdded(InternalEntity entity)
@@ -275,7 +277,7 @@ namespace LiteEntitySystem
                 {
                     if (inData.Length < sizeof(BaselineDataHeader) + 2)
                         return DeserializeResult.Error;
-                    _entitiesToConstructCount = 0;
+                    _entitiesToConstruct.Clear();
                     _syncCallsCount = 0;
                     _syncCallsBeforeConstructCount = 0;
                     //read header and decode
@@ -536,13 +538,13 @@ namespace LiteEntitySystem
             }
             
             //delete predicted
-            while (_spawnPredictedEntities.TryPeek(out var info))
+            while (_spawnPredictedEntities.TryGetMin(out var predictedEntity))
             {
-                if (Utils.SequenceDiff(_stateA.ProcessedTick, info.tick) >= 0)
+                if (Utils.SequenceDiff(_stateA.ProcessedTick, predictedEntity.CreatedTick) >= 0)
                 {
                     Logger.Log("Delete predicted");
-                    _spawnPredictedEntities.Dequeue();
-                    info.entity.DestroyInternal();
+                    _spawnPredictedEntities.Remove(predictedEntity);
+                    predictedEntity.DestroyInternal();
                 }
                 else
                 {
@@ -775,7 +777,7 @@ namespace LiteEntitySystem
                 AliveEntities.Remove(entity);
         }
 
-        internal T AddPredictedEntity<T>(Action<T> initMethod) where T : EntityLogic
+        internal T AddPredictedEntity<T>(Action<T> initMethod, int orderNum) where T : EntityLogic
         {
             ushort classId = EntityClassInfo<T>.ClassId;
             if (classId >= ClassDataDict.Length)
@@ -783,18 +785,21 @@ namespace LiteEntitySystem
             var classData = ClassDataDict[classId];
             if (classData.EntityConstructor == null)
                throw new Exception($"Unregistered entity class constructor: {classId} - {typeof(T)}");
-
+            
             var entity = (T)classData.EntityConstructor(new EntityParams(
-               classId,
-               _localIdQueue.GetNewId(),
-               0,
-               TotalTicksPassed,
-               EntityCreationType.Predicted,
-               this));
+                new EntityDataHeader(
+                    _localIdQueue.GetNewId(),
+                    classId,
+                    0,
+                    orderNum,
+                    _tick,
+                    EntityCreationType.Predicted),
+               this,
+               classData.AllocateDataCache(this)));
             entity.InternalOwnerId.Value = InternalPlayerId;
             initMethod?.Invoke(entity);
             ConstructEntity(entity);
-            _spawnPredictedEntities.Enqueue((_tick, entity));
+            _spawnPredictedEntities.Add(entity);
             return entity;
         }
 
@@ -826,19 +831,18 @@ namespace LiteEntitySystem
             ExecuteSyncCalls(_syncCallsBeforeConstruct, ref _syncCallsBeforeConstructCount);
 
             //Call construct methods
-            Array.Sort(_entitiesToConstruct, 0, _entitiesToConstructCount, EntityComparer.Instance);
-            for (int i = 0; i < _entitiesToConstructCount; i++)
-                ConstructEntity(_entitiesToConstruct[i]);
-            _entitiesToConstructCount = 0;
+            foreach (var entity in _entitiesToConstruct)
+                ConstructEntity(entity);
+            _entitiesToConstruct.Clear();
             
             //Make OnChangeCalls after construct
             ExecuteSyncCalls(_syncCalls, ref _syncCallsCount);
             
             //execute entity rpcs
             _stateA.ExecuteRpcs(this, minimalTick, firstSync);
-            
+
             foreach (var lagCompensatedEntity in LagCompensatedEntities)
-                lagCompensatedEntity.WriteHistory(ServerTick);
+                ClassDataDict[lagCompensatedEntity.ClassId].WriteHistory(lagCompensatedEntity, ServerTick);
         }
 
         private unsafe bool ReadEntityState(byte* rawData, bool fistSync)
@@ -848,7 +852,7 @@ namespace LiteEntitySystem
                 bool fullSync = true;
                 int endPos = 0;
                 InternalEntity entity;
-                ref readonly var classData = ref EntityClassData.Empty;
+                ref var classData = ref _tempEmptyData;
                 bool writeInterpolationData;
                 
                 if (!fistSync) //diff data
@@ -875,31 +879,36 @@ namespace LiteEntitySystem
                         Logger.Log($"[CEM] Replace entity by new: {entityDataHeader.Version}");
                         entity.DestroyInternal();
                         entity = null;
-                    } 
-                    if (entity == null) //create new
+                    }
+                    //find predicted
+                    if (entity == null && entityDataHeader.CreationType == EntityCreationType.PredictedVerified)
                     {
-                        if (entityDataHeader.CreationType == EntityCreationType.PredictedVerified)
+                        foreach (var predictedSpawnedEntity in _spawnPredictedEntities)
                         {
-                            foreach ((ushort tick, EntityLogic predictedSpawnedEntity) in _spawnPredictedEntities)
+                            if (predictedSpawnedEntity.ClassId == entityDataHeader.ClassId &&
+                                predictedSpawnedEntity.CreatedTick == entityDataHeader.CreatedTick)
                             {
-                                if (predictedSpawnedEntity.ClassId == entityDataHeader.ClassId)
-                                {
-                                    entity = predictedSpawnedEntity;
-                                    entity.PromoteToRemote(entityDataHeader);
-                                    EntitiesDict[entity.Id] = entity;
-                                    break;
-                                }
+                                entity = predictedSpawnedEntity;
+                                entity.PromoteToRemote(entityDataHeader);
+                                EntitiesDict[entity.Id] = entity;
+                                classData = ref ClassDataDict[entity.ClassId];
+                                _spawnPredictedEntities.Remove(predictedSpawnedEntity);
+                                break;
                             }
                         }
-                        entity = AddEntity(new EntityParams(entityDataHeader, this));
-                        classData = ref entity.ClassData;
+                    }
+                    //if predicted not found
+                    if (entity == null) //create new
+                    {
+                        classData = ref ClassDataDict[entityDataHeader.ClassId];
+                        entity = AddEntity(new EntityParams(entityDataHeader, this, classData.AllocateDataCache(this)));
                         if (classData.PredictedSize > 0 || classData.SyncableFields.Length > 0)
                         {
                             _predictedEntityFilter.Add(entity);
                             //Logger.Log($"Add predicted: {entity.GetType()}");
                         }
-                        Utils.ResizeIfFull(ref _entitiesToConstruct, _entitiesToConstructCount);
-                        _entitiesToConstruct[_entitiesToConstructCount++] = entity;
+                        _entitiesToConstruct.Add(entity);
+                        
                         writeInterpolationData = true;
                     }
                     else //update "old"
@@ -917,7 +926,7 @@ namespace LiteEntitySystem
                     entity = EntitiesDict[entityId];
                     if(entity != null)
                     {
-                        classData = ref entity.ClassData;
+                        classData = ref ClassDataDict[entity.ClassId];
                         writeInterpolationData = entity.IsRemoteControlled;
                         readerPosition += classData.FieldsFlagsSize;
                     }

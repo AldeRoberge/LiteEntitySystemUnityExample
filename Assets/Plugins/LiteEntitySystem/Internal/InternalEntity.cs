@@ -4,20 +4,24 @@ using System.Runtime.CompilerServices;
 
 namespace LiteEntitySystem.Internal
 {
-    internal struct EntityDataHeader
+    public readonly struct EntityDataHeader
     {
-        public ushort Id;
-        public ushort ClassId;
-        public byte Version;
-        public int CreationTick;
-        public EntityCreationType CreationType;
-    }
-    
-    public class EntityComparer : IComparer<InternalEntity>
-    {
-        public int Compare(InternalEntity x, InternalEntity y) => x.CompareTo(y);
-
-        public static readonly EntityComparer Instance = new();
+        public readonly ushort Id;
+        public readonly ushort ClassId;
+        public readonly byte Version;
+        public readonly int UpdateOrder;
+        public readonly ushort CreatedTick;
+        public readonly EntityCreationType CreationType;
+        
+        public EntityDataHeader(ushort id, ushort classId, byte version, int updateOrder, ushort createdTick, EntityCreationType creationType)
+        {
+            Id = id;
+            ClassId = classId;
+            Version = version;
+            UpdateOrder = updateOrder;
+            CreationType = creationType;
+            CreatedTick = createdTick;
+        }
     }
 
     public enum EntityCreationType : byte
@@ -33,6 +37,10 @@ namespace LiteEntitySystem.Internal
         internal SyncVar<byte> InternalOwnerId;
         
         internal byte[] IOBuffer;
+
+        internal int UpdateOrderNum;
+
+        internal readonly ushort CreatedTick;
         
         /// <summary>
         /// Entity class id
@@ -43,11 +51,6 @@ namespace LiteEntitySystem.Internal
         /// Entity instance id
         /// </summary>
         public ushort Id { get; private set; }
-
-        /// <summary>
-        /// Entity creation tick number that can be more than ushort
-        /// </summary>
-        internal int CreationTick { get; private set; }
 
         public EntityCreationType CreationType { get; private set; }
         
@@ -72,13 +75,14 @@ namespace LiteEntitySystem.Internal
         public byte Version { get; private set; }
 
         internal EntityDataHeader DataHeader => new EntityDataHeader
-        {
-            Id = Id,
-            ClassId = ClassId,
-            CreationTick = CreationTick,
-            Version = Version,
-            CreationType = CreationType
-        };
+        (
+            Id,
+            ClassId,
+            Version,
+            UpdateOrderNum,
+            CreatedTick,
+            CreationType
+        );
         
         [SyncVarFlags(SyncFlags.NeverRollBack)]
         private SyncVar<bool> _isDestroyed;
@@ -119,15 +123,16 @@ namespace LiteEntitySystem.Internal
         /// Singletons always controlled by server
         /// </summary>
         public byte OwnerId => InternalOwnerId;
-        
+
         internal ref EntityClassData ClassData => ref EntityManager.ClassDataDict[ClassId];
 
         internal void PromoteToRemote(EntityDataHeader dataHeader)
         {
+            Logger.Log("Promoted to remote entity");
+            UpdateOrderNum = dataHeader.UpdateOrder;
             CreationType = EntityCreationType.PredictedVerified;
             Id = dataHeader.Id;
             Version = dataHeader.Version;
-            CreationTick = dataHeader.CreationTick;
         }
 
         /// <summary>
@@ -164,7 +169,6 @@ namespace LiteEntitySystem.Internal
             _isDestroyed.Value = true;
             OnDestroy();
             EntityManager.RemoveEntity(this);
-            ClassData.ReleaseDataCache(this);
         }
 
         internal void SafeUpdate()
@@ -278,29 +282,19 @@ namespace LiteEntitySystem.Internal
         protected InternalEntity(EntityParams entityParams)
         {
             EntityManager = entityParams.EntityManager;
-            Id = entityParams.Id;
-            ClassId = entityParams.ClassId;
-            Version = entityParams.Version;
-            CreationTick = entityParams.CreationTime;
+            Id = entityParams.Header.Id;
+            ClassId = entityParams.Header.ClassId;
+            Version = entityParams.Header.Version;
+            UpdateOrderNum = entityParams.Header.UpdateOrder;
             CreationType = entityParams.CreationType;
-            ClassData.AllocateDataCache(this);
+            IOBuffer = entityParams.IOBuffer;
+            CreatedTick = entityParams.Header.CreatedTick;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public int CompareTo(InternalEntity other)
-        {
-            int creationTimeDiff = CreationTick - other.CreationTick;
-            if (creationTimeDiff != 0)
-                return creationTimeDiff;
+        public int CompareTo(InternalEntity other) => UpdateOrderNum != other.UpdateOrderNum ? UpdateOrderNum - other.UpdateOrderNum : Id - other.Id;
 
-            int versionDiff = Version - other.Version;
-            if (versionDiff != 0)
-                return versionDiff;
-            
-            return Id - other.Id;
-        }
-
-        public override int GetHashCode() => Id + Version * ushort.MaxValue;
+        public override int GetHashCode() => UpdateOrderNum;
 
         public override string ToString() =>
             $"Entity. Id: {Id}, ClassId: {ClassId}, Version: {Version}";

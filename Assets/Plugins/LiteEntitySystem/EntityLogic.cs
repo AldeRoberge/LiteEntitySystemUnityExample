@@ -55,8 +55,6 @@ namespace LiteEntitySystem
         
         public EntitySharedReference SharedReference => new EntitySharedReference(this);
         
-        internal void WriteHistory(ushort tick) => ClassData.WriteHistory(this, tick);
-        
         //on client it works only in rollback
         internal void EnableLagCompensation(NetPlayer player)
         {
@@ -120,8 +118,9 @@ namespace LiteEntitySystem
                     return ServerManager.AddEntity(initMethod);
                 }
 
-                var predictedEntity = ServerManager.AddInternal(initMethod, EntityCreationType.PredictedVerified);
                 var player = ServerManager.GetPlayer(InternalOwnerId);
+                var predictedEntity = ServerManager.AddInternal(initMethod, player.LastProcessedTick, EntityCreationType.PredictedVerified);
+          
                 ushort playerServerTick = player.SimulatedServerTick;
                 while (playerServerTick != ServerManager.Tick)
                 {
@@ -131,7 +130,7 @@ namespace LiteEntitySystem
 
                 return predictedEntity;
             }
-            return ClientManager.AddPredictedEntity(initMethod);
+            return ClientManager.AddPredictedEntity(initMethod, UpdateOrderNum++);
         }
 
         /// <summary>

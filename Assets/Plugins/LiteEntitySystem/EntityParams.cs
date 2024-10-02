@@ -4,37 +4,17 @@ namespace LiteEntitySystem
 {
     public readonly ref struct EntityParams
     {
-        public readonly ushort ClassId;
-        public readonly ushort Id;
-        public readonly byte Version;
-        public readonly int CreationTime;
+        public readonly EntityDataHeader Header;
         public readonly EntityCreationType CreationType;
         public readonly EntityManager EntityManager;
+        public readonly byte[] IOBuffer;
 
-        internal EntityParams(EntityDataHeader dataHeader, EntityManager entityManager)
+        internal EntityParams(EntityDataHeader dataHeader, EntityManager entityManager, byte[] ioBuffer)
         {
-            ClassId = dataHeader.ClassId;
-            Id = dataHeader.Id;
-            Version = dataHeader.Version;
-            CreationTime = dataHeader.CreationTick;
+            Header = dataHeader;
             CreationType = dataHeader.CreationType;
             EntityManager = entityManager;
-        }
-        
-        internal EntityParams(
-            ushort classId,
-            ushort id,
-            byte version,
-            int creationTime,
-            EntityCreationType creationType,
-            EntityManager entityManager)
-        {
-            ClassId = classId;
-            Id = id;
-            Version = version;
-            CreationTime = creationTime;
-            EntityManager = entityManager;
-            CreationType = creationType;
+            IOBuffer = ioBuffer;
         }
     }
 }

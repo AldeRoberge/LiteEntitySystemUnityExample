@@ -70,6 +70,8 @@ namespace LiteEntitySystem
         /// Add try catch to entity updates
         /// </summary>
         public bool SafeEntityUpdate = false;
+        
+        private int _nextOrderNum;
 
         /// <summary>
         /// Constructor
@@ -117,6 +119,7 @@ namespace LiteEntitySystem
         public override void Reset()
         {
             base.Reset();
+            _nextOrderNum = 0;
             _changedEntities.Clear();
         }
 
@@ -389,9 +392,6 @@ namespace LiteEntitySystem
             //send only if tick changed
             if (_netPlayers.Count == 0 || prevTick == _tick || _tick % (int) SendRate != 0)
                 return;
-            
-            while (MaxSyncedEntityId > 0 && _stateSerializers[MaxSyncedEntityId].State == SerializerState.Freed)
-                MaxSyncedEntityId--;
 
             //calculate minimalTick and potential baseline size
             ushort executedTick = (ushort)(_tick - 1);
@@ -407,8 +407,8 @@ namespace LiteEntitySystem
                 else if (maxBaseline == 0)
                 {
                     maxBaseline = sizeof(BaselineDataHeader);
-                    for (ushort i = FirstEntityId; i <= MaxSyncedEntityId; i++)
-                        maxBaseline += _stateSerializers[i].GetMaximumSize(executedTick);
+                    foreach (var entity in AllEntities)
+                        maxBaseline += _stateSerializers[entity.Id].GetMaximumSize(executedTick);
                     if (_packetBuffer.Length < maxBaseline)
                         _packetBuffer = new byte[maxBaseline];
                     int maxCompressedSize = LZ4Codec.MaximumOutputSize(_packetBuffer.Length) + sizeof(BaselineDataHeader);
@@ -426,8 +426,8 @@ namespace LiteEntitySystem
                 if (player.State == NetPlayerState.RequestBaseline)
                 {
                     int originalLength = 0;
-                    for (ushort i = FirstEntityId; i <= MaxSyncedEntityId; i++)
-                        _stateSerializers[i].MakeBaseline(player.Id, executedTick, packetBuffer, ref originalLength);
+                    foreach (var entity in AllEntities)
+                        _stateSerializers[entity.Id].MakeBaseline(player.Id, executedTick, packetBuffer, ref originalLength);
                     
                     //set header
                     *(BaselineDataHeader*)compressionBuffer = new BaselineDataHeader
@@ -495,8 +495,7 @@ namespace LiteEntitySystem
                         playerController);
                     if (diffResult == DiffResult.DoneAndDestroy)
                     {
-                        _entityIdQueue.ReuseId(changedEntity.Id);
-                        _changedEntities.Remove(changedEntity);
+                        ReleaseEntity(changedEntity);
                     }
                     else if (diffResult == DiffResult.Done)
                     {
@@ -547,8 +546,11 @@ namespace LiteEntitySystem
             //trigger only when there is data
             _netPlayers.GetByIndex(0).Peer.TriggerSend();
         }
+
+        internal T AddInternal<T>(Action<T> initMethod) where T : InternalEntity =>
+            AddInternal(initMethod, _tick, EntityCreationType.FromServer);
         
-        internal T AddInternal<T>(Action<T> initMethod, EntityCreationType creationType = EntityCreationType.FromServer) where T : InternalEntity
+        internal T AddInternal<T>(Action<T> initMethod, ushort creationTick, EntityCreationType creationType) where T : InternalEntity
         {
             if (EntityClassInfo<T>.ClassId == 0)
                 throw new Exception($"Unregistered entity type: {typeof(T)}");
@@ -563,14 +565,18 @@ namespace LiteEntitySystem
             ushort entityId = _entityIdQueue.GetNewId();
             ref var stateSerializer = ref _stateSerializers[entityId];
 
-            stateSerializer.AllocateMemory(ref classData);
+            byte[] ioBuffer = classData.AllocateDataCache(this);
+            stateSerializer.AllocateMemory(ref classData, ioBuffer);
             var entity = (T)AddEntity(new EntityParams(
-                classData.ClassId, 
-                entityId,
-                stateSerializer.NextVersion,
-                TotalTicksPassed,
-                creationType,
-                this));
+                new EntityDataHeader(
+                    entityId,
+                    classData.ClassId, 
+                    stateSerializer.NextVersion,
+                    ++_nextOrderNum,
+                    creationTick,
+                    creationType),
+                this,
+                ioBuffer));
             stateSerializer.Init(entity, _tick);
             initMethod?.Invoke(entity);
             ConstructEntity(entity);
@@ -634,16 +640,31 @@ namespace LiteEntitySystem
             }
             
             foreach (var lagCompensatedEntity in LagCompensatedEntities)
-                lagCompensatedEntity.WriteHistory(_tick);
+                ClassDataDict[lagCompensatedEntity.ClassId].WriteHistory(lagCompensatedEntity, _tick);
         }
 
         internal override void RemoveEntity(InternalEntity e)
         {
             base.RemoveEntity(e);
+            if (e.UpdateOrderNum == _nextOrderNum)
+            {
+                //this was highest
+                _nextOrderNum = AllEntities.TryGetMax(out var highestEntity)
+                    ? highestEntity.UpdateOrderNum
+                    : 0;
+                Logger.Log($"Removed highest order entity: {e.UpdateOrderNum}, new highest: {_nextOrderNum}");
+            }
             _stateSerializers[e.Id].Destroy(_tick, PlayersCount == 0);
             //destroy instantly when no players to free ids
-            if (PlayersCount == 0)
-                _entityIdQueue.ReuseId(e.Id);
+            if (_stateSerializers[e.Id].State == SerializerState.Freed)
+                ReleaseEntity(e);
+        }
+
+        private void ReleaseEntity(InternalEntity entity)
+        {
+            ClassDataDict[entity.ClassId].ReleaseDataCache(entity);
+            _entityIdQueue.ReuseId(entity.Id);
+            _changedEntities.Remove(entity);
         }
 
         internal void EntityChanged(InternalEntity entity)

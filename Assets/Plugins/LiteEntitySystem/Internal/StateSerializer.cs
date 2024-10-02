@@ -93,23 +93,17 @@ namespace LiteEntitySystem.Internal
             tail = null;
         }
 
-        public void AllocateMemory(ref EntityClassData classData)
+        public void AllocateMemory(ref EntityClassData classData, byte[] ioBuffer)
         {
             if (_state != SerializerState.Freed)
                 Logger.LogError($"State serializer isn't freed: {_state}");
-
             
             _fields = classData.Fields;
             _fieldsCount = classData.FieldsCount;
             _fieldsFlagsSize = classData.FieldsFlagsSize;
             _fullDataSize = (uint)(HeaderSize + classData.FixedFieldsSize);
             _flags = classData.Flags;
-            
-            //resize or clean prev data
-            if (_latestEntityData == null || _latestEntityData.Length < _fullDataSize)
-                _latestEntityData = new byte[_fullDataSize];
-            else
-                Array.Clear(_latestEntityData, HeaderSize, classData.FixedFieldsSize);
+            _latestEntityData = ioBuffer;
             
             if (_fieldChangeTicks == null || _fieldChangeTicks.Length < _fieldsCount)
                 _fieldChangeTicks = new ushort[_fieldsCount];
@@ -155,6 +149,7 @@ namespace LiteEntitySystem.Internal
             if (instantly || serverTick == _versionChangedTick)
             {
                 _state = SerializerState.Freed;
+                _latestEntityData = null;
                 return;
             }
             _state = SerializerState.Destroyed;
@@ -250,6 +245,7 @@ namespace LiteEntitySystem.Internal
                 
                 case SerializerState.Destroyed when Utils.SequenceDiff(LastChangedTick, minimalTick) < 0:
                     _state = SerializerState.Freed;
+                    _latestEntityData = null;
                     return DiffResult.DoneAndDestroy;
                 
                 case SerializerState.Active:
