@@ -20,7 +20,11 @@ namespace LiteEntitySystem
         /// <summary>
         /// Sync entity only for owner player
         /// </summary>
+<<<<<<< HEAD
         OnlyForOwner = 1 << 2
+=======
+        OnlyForOwner = 1 << 3
+>>>>>>> refs/remotes/origin/main
     }
     
     [AttributeUsage(AttributeTargets.Class)]
