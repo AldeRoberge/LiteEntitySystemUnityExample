@@ -11,7 +11,7 @@ namespace LiteEntitySystem
 
         public bool IsValid => Id != EntityManager.InvalidEntityId;
         public bool IsInvalid => Id == EntityManager.InvalidEntityId;
-        public bool IsLocal => Id == EntityManager.LocalEntityId;
+        public bool IsLocal => Id > EntityManager.MaxEntityCount; //because 0 - invalid
 
         public static readonly EntitySharedReference Empty;
 

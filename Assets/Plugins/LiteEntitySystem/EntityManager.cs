@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using LiteEntitySystem.Collections;
 using LiteEntitySystem.Extensions;
 using LiteEntitySystem.Internal;
 
@@ -73,8 +74,6 @@ namespace LiteEntitySystem
         /// Invalid entity id
         /// </summary>
         public const ushort InvalidEntityId = 0;
-
-        public const ushort LocalEntityId = ushort.MaxValue;
         
         /// <summary>
         /// Total entities count (including local)
@@ -135,6 +134,9 @@ namespace LiteEntitySystem
         /// Local player id (0 on server)
         /// </summary>
         public byte PlayerId => InternalPlayerId;
+
+        public event Action OnBeforeLogicUpdate;
+        public event Action OnAfterLogicUpdate;
         
         public readonly byte HeaderByte;
         
@@ -152,8 +154,8 @@ namespace LiteEntitySystem
         protected int MaxSyncedEntityId = -1; //current maximum id
         protected ushort _tick;
         
-        protected readonly EntityFilter<InternalEntity> AliveEntities = new();
-        protected readonly EntityFilter<EntityLogic> LagCompensatedEntities = new();
+        protected readonly AVLTree<InternalEntity> AliveEntities = new();
+        protected readonly AVLTree<EntityLogic> LagCompensatedEntities = new();
 
         private readonly double _stopwatchFrequency;
         private readonly Stopwatch _stopwatch = new();
@@ -274,13 +276,9 @@ namespace LiteEntitySystem
             _accumulator = 0;
             _lastTime = 0;
             InternalPlayerId = 0;
-<<<<<<< HEAD
-            _stopwatch.Restart();
-=======
-            _localIdQueue.Reset();
             _stopwatch.Stop();
             _stopwatch.Reset();
->>>>>>> refs/remotes/origin/main
+
             AliveEntities.Clear();
             
             for (int i = FirstEntityId; i <= MaxSyncedEntityId; i++)
@@ -405,23 +403,6 @@ namespace LiteEntitySystem
             singleton = null;
             return false;
         }
-
-        /// <summary>
-        /// Add new local singleton
-        /// </summary>
-        /// <typeparam name="T">Entity type</typeparam>
-        /// <returns>Created entity or null in case of limit</returns>
-        public T AddSignleton<T>() where T : LocalSingletonEntityLogic
-        {
-            var entity = (T)GetClassDataFromType<T>(EntityClassInfo<T>.ClassId).EntityConstructor(new EntityParams(
-                EntityClassInfo<T>.ClassId,
-                LocalEntityId,
-                0,
-                TotalTicksPassed,
-                this));
-            ConstructEntity(entity);
-            return entity;
-        }
         
         internal ref EntityClassData GetClassDataFromType<T>(ushort classId) where T : InternalEntity
         {
@@ -440,11 +421,12 @@ namespace LiteEntitySystem
             
             var entity = GetClassDataFromType<InternalEntity>(entityParams.ClassId).EntityConstructor(entityParams);
             entity.RegisterRpcInternal();
-
-            if(entityParams.Id != LocalEntityId)
+            if (entityParams.Id <= MaxEntityCount)
+            {
                 MaxSyncedEntityId = MaxSyncedEntityId < entityParams.Id ? entityParams.Id : MaxSyncedEntityId;
-            
-            EntitiesDict[entity.Id] = entity;
+                EntitiesDict[entity.Id] = entity;
+            }
+           
             EntitiesCount++;
             return entity;
         }
@@ -468,19 +450,28 @@ namespace LiteEntitySystem
                 foreach (int baseId in classData.BaseIds)
                     _entityFilters[baseId]?.Add(e);
             }
-            
 
-            if (IsEntityAlive(classData, e))
+
+            if (IsEntityAlive(ref classData, e))
+            {
                 AliveEntities.Add(e);
+                OnAliveEntityAdded(e);
+            }
             if (IsEntityLagCompensated(e))
                 LagCompensatedEntities.Add((EntityLogic)e);
         }
 
-        private static bool IsEntityLagCompensated(InternalEntity e)
-            => !e.IsLocal && e is EntityLogic { HasLagCompensation: true };
+        protected virtual void OnAliveEntityAdded(InternalEntity e)
+        {
+            
+        }
 
-        private bool IsEntityAlive(EntityClassData classData, InternalEntity entity)
-            => classData.Flags.HasFlagFast(EntityFlags.Updateable) && (IsServer || entity.IsLocal || (IsClient && classData.Flags.HasFlagFast(EntityFlags.UpdateOnClient)));
+        private static bool IsEntityLagCompensated(InternalEntity e)
+            => e.CreationType != EntityCreationType.Predicted && e is EntityLogic && e.ClassData.LagCompensatedCount > 0;
+
+        private bool IsEntityAlive(ref EntityClassData classData, InternalEntity entity)
+            => classData.Flags.HasFlagFast(EntityFlags.Updateable) && 
+               (IsServer || entity.CreationType == EntityCreationType.Predicted || (IsClient && classData.Flags.HasFlagFast(EntityFlags.UpdateOnClient)));
 
         internal virtual void RemoveEntity(InternalEntity e)
         {
@@ -499,11 +490,12 @@ namespace LiteEntitySystem
                     _entityFilters[baseId]?.Remove(e);
             }
 
-            if (IsEntityAlive(classData, e))
+            if (IsEntityAlive(ref classData, e))
                 AliveEntities.Remove(e);
             if(IsEntityLagCompensated(e))
                 LagCompensatedEntities.Remove((EntityLogic)e);
-            EntitiesDict[e.Id] = null;
+            if(e.Id < EntitiesDict.Length)
+                EntitiesDict[e.Id] = null;
             EntitiesCount--;
             //Logger.Log($"{Mode} - RemoveEntity: {e.Id}");
         }
@@ -562,12 +554,14 @@ namespace LiteEntitySystem
                     _accumulator = 0;
                     return;
                 }
+                OnBeforeLogicUpdate?.Invoke();
                 OnLogicTick();
                 _tick++;
                 TotalTicksPassed++;
 
                 _accumulator -= maxTicks;
                 updates++;
+                OnAfterLogicUpdate?.Invoke();
             }
             _lerpFactor = (float)_accumulator / maxTicks;
         }

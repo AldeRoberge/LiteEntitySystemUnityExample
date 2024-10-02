@@ -10,6 +10,7 @@ namespace LiteEntitySystem.Internal
         public ushort ClassId;
         public byte Version;
         public int CreationTick;
+        public EntityCreationType CreationType;
     }
     
     public class EntityComparer : IComparer<InternalEntity>
@@ -18,11 +19,20 @@ namespace LiteEntitySystem.Internal
 
         public static readonly EntityComparer Instance = new();
     }
+
+    public enum EntityCreationType : byte
+    {
+        FromServer,
+        Predicted,
+        PredictedVerified
+    }
     
     public abstract class InternalEntity : InternalBaseClass, IComparable<InternalEntity>
     {
         [SyncVarFlags(SyncFlags.NeverRollBack)]
         internal SyncVar<byte> InternalOwnerId;
+        
+        internal byte[] IOBuffer;
         
         /// <summary>
         /// Entity class id
@@ -32,12 +42,14 @@ namespace LiteEntitySystem.Internal
         /// <summary>
         /// Entity instance id
         /// </summary>
-        public readonly ushort Id;
+        public ushort Id { get; private set; }
 
         /// <summary>
         /// Entity creation tick number that can be more than ushort
         /// </summary>
-        internal readonly int CreationTick;
+        internal int CreationTick { get; private set; }
+
+        public EntityCreationType CreationType { get; private set; }
         
         /// <summary>
         /// Entity manager
@@ -52,19 +64,20 @@ namespace LiteEntitySystem.Internal
         /// <summary>
         /// Is entity on server
         /// </summary>
-        protected bool IsClient => EntityManager.IsClient;
+        protected internal bool IsClient => EntityManager.IsClient;
 
         /// <summary>
         /// Entity version (for id reuse)
         /// </summary>
-        public readonly byte Version;
+        public byte Version { get; private set; }
 
         internal EntityDataHeader DataHeader => new EntityDataHeader
         {
             Id = Id,
             ClassId = ClassId,
             CreationTick = CreationTick,
-            Version = Version
+            Version = Version,
+            CreationType = CreationType
         };
         
         [SyncVarFlags(SyncFlags.NeverRollBack)]
@@ -106,20 +119,23 @@ namespace LiteEntitySystem.Internal
         /// Singletons always controlled by server
         /// </summary>
         public byte OwnerId => InternalOwnerId;
-
-        /// <summary>
-        /// Is locally created entity
-        /// </summary>
-        public bool IsLocal => Id == EntityManager.LocalEntityId;
         
         internal ref EntityClassData ClassData => ref EntityManager.ClassDataDict[ClassId];
+
+        internal void PromoteToRemote(EntityDataHeader dataHeader)
+        {
+            CreationType = EntityCreationType.PredictedVerified;
+            Id = dataHeader.Id;
+            Version = dataHeader.Version;
+            CreationTick = dataHeader.CreationTick;
+        }
 
         /// <summary>
         /// Destroy entity
         /// </summary>
         public void Destroy()
         {
-            if ((EntityManager.IsClient && !IsLocal) || _isDestroyed)
+            if ((EntityManager.IsClient && CreationType != EntityCreationType.Predicted) || _isDestroyed)
                 return;
             DestroyInternal();
         }
@@ -148,6 +164,7 @@ namespace LiteEntitySystem.Internal
             _isDestroyed.Value = true;
             OnDestroy();
             EntityManager.RemoveEntity(this);
+            ClassData.ReleaseDataCache(this);
         }
 
         internal void SafeUpdate()
@@ -197,7 +214,7 @@ namespace LiteEntitySystem.Internal
             ref var classData = ref ClassData;
             
             //setup field ids for BindOnChange and pass on server this for OnChangedEvent to StateSerializer
-            var onChangeTarget = EntityManager.IsServer && !IsLocal ? this : null;
+            var onChangeTarget = EntityManager.IsServer ? this : null;
             for (int i = 0; i < classData.FieldsCount; i++)
             {
                 ref var field = ref classData.Fields[i];
@@ -265,6 +282,8 @@ namespace LiteEntitySystem.Internal
             ClassId = entityParams.ClassId;
             Version = entityParams.Version;
             CreationTick = entityParams.CreationTime;
+            CreationType = entityParams.CreationType;
+            ClassData.AllocateDataCache(this);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -277,12 +296,6 @@ namespace LiteEntitySystem.Internal
             int versionDiff = Version - other.Version;
             if (versionDiff != 0)
                 return versionDiff;
-            
-            //local first because mostly this is unity physics or something similar
-            if (IsLocal && !other.IsLocal)
-                return 1;
-            if (!IsLocal && other.IsLocal) 
-                return -1;
             
             return Id - other.Id;
         }

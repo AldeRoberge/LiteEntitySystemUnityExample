@@ -12,15 +12,4 @@ namespace LiteEntitySystem
             InternalOwnerId.Value = EntityManager.ServerPlayerId;
         }
     }
-
-    /// <summary>
-    /// Base class for local-only singletons without synchronization 
-    /// </summary>
-    public abstract class LocalSingletonEntityLogic : InternalEntity
-    {
-        protected LocalSingletonEntityLogic(EntityParams entityParams) : base(entityParams)
-        {
-            InternalOwnerId.Value = EntityManager.InternalPlayerId;
-        }
-    }
 }

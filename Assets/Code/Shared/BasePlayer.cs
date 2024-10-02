@@ -56,12 +56,12 @@ namespace Code.Shared
             _unityPhys = EntityManager.GetSingleton<UnityPhysicsManager>();
             UnityObject = new GameObject($"Player_{Name}_{Id}");
             UnityObject.transform.SetParent(_unityPhys.Root);
+            UnityObject.AddComponent<BasePlayerView>().AttachedPlayer = this;
             _collider = UnityObject.AddComponent<BoxCollider2D>();
             _rigidbody = UnityObject.AddComponent<Rigidbody2D>();
             _rigidbody.isKinematic = true;
             _collider.isTrigger = true;
             _collider.size = Vector2.one * 0.66f;
-            UnityObject.AddComponent<BasePlayerView>().AttachedPlayer = this;
         }
 
         public void SetActive(bool active)
@@ -136,11 +136,17 @@ namespace Code.Shared
             _projectileFire = isProjectileFiring;
         }
 
+        protected override void VisualUpdate()
+        {
+            UnityObject.transform.SetPositionAndRotation(_position.Value, Quaternion.Euler(0f, 0f, Rotation));
+        }
+
         protected override void Update()
         {
             base.Update();
             _rotation.Value = _targetRotation;
             _position.Value += _velocity * EntityManager.DeltaTimeF;
+            _rigidbody.position = _position.Value;
             _shootTimer.Update(EntityManager.DeltaTimeF);
             if (_shootTimer.IsTimeElapsed && (_isFiring || _projectileFire))
             {
@@ -181,7 +187,7 @@ namespace Code.Shared
                     {
                         OwnerId = OwnerId,
                         Position = _position,
-                        Speed = new Vector2(Mathf.Cos(_rotation.Value * Mathf.Deg2Rad), Mathf.Sin(_rotation.Value * Mathf.Deg2Rad)) * 10f
+                        Speed = new Vector2(Mathf.Cos(_rotation.Value * Mathf.Deg2Rad), Mathf.Sin(_rotation.Value * Mathf.Deg2Rad)) * 2f
                     };
                     AddPredictedEntity<SimpleProjectile>(initParams.Init);
                 }

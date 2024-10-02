@@ -78,7 +78,7 @@ namespace LiteEntitySystem.Internal
                 int totalSize = fullSyncAndTotalSize >> 1;
                 bytesRead += totalSize;
                 ushort entityId = BitConverter.ToUInt16(Data, initialReaderPosition + sizeof(ushort));
-                if (entityId == EntityManager.InvalidEntityId || entityId == EntityManager.LocalEntityId)
+                if (entityId == EntityManager.InvalidEntityId || entityId > EntityManager.MaxEntityCount)
                 {
                     //Should remove at all
                     Logger.LogError($"[CEM] Invalid entity id: {entityId}");

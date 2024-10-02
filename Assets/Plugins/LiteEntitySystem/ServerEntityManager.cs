@@ -45,14 +45,16 @@ namespace LiteEntitySystem
         private readonly Queue<byte[]> _pendingClientRequests = new();
         private byte[] _packetBuffer = new byte[(MaxParts+1) * NetConstants.MaxPacketSize + StateSerializer.MaxStateSize];
         private readonly SparseMap<NetPlayer> _netPlayers = new (MaxPlayers+1);
-        private readonly StateSerializer[] _stateSerializers = new StateSerializer[MaxEntityCount];
+        private readonly StateSerializer[] _stateSerializers = new StateSerializer[MaxEntityCount+1];
         private readonly byte[] _inputDecodeBuffer = new byte[NetConstants.MaxUnreliableDataSize];
         private readonly NetDataReader _requestsReader = new();
         
         //use entity filter for correct sort (id+version+creationTime)
-        private readonly EntityFilter<InternalEntity> _changedEntities = new();
+        private readonly AVLTree<InternalEntity> _changedEntities = new();
         
         private byte[] _compressionBuffer = new byte[4096];
+        
+        private ushort _minimalTick;
         
         /// <summary>
         /// Network players count
@@ -68,8 +70,6 @@ namespace LiteEntitySystem
         /// Add try catch to entity updates
         /// </summary>
         public bool SafeEntityUpdate = false;
-
-        private ushort _minimalTick;
 
         /// <summary>
         /// Constructor
@@ -209,7 +209,7 @@ namespace LiteEntitySystem
         /// <typeparam name="T">Entity type</typeparam>
         /// <returns>Created entity or null in case of limit</returns>
         public T AddController<T>(NetPlayer owner, Action<T> initMethod = null) where T : ControllerLogic =>
-            Add<T>(ent =>
+            AddInternal<T>(ent =>
             {
                 ent.InternalOwnerId.Value = owner.Id;
                 initMethod?.Invoke(ent);
@@ -224,7 +224,7 @@ namespace LiteEntitySystem
         /// <typeparam name="T">Entity type</typeparam>
         /// <returns>Created entity or null in case of limit</returns>
         public T AddController<T>(NetPlayer owner, PawnLogic entityToControl, Action<T> initMethod = null) where T : ControllerLogic =>
-            Add<T>(ent =>
+            AddInternal<T>(ent =>
             {
                 ent.InternalOwnerId.Value = owner.Id;
                 ent.StartControl(entityToControl);
@@ -238,7 +238,7 @@ namespace LiteEntitySystem
         /// <typeparam name="T">Entity type</typeparam>
         /// <returns>Created entity or null in case of limit</returns>
         public T AddAIController<T>(Action<T> initMethod = null) where T : AiControllerLogic => 
-            Add(initMethod);
+            AddInternal(initMethod);
 
         /// <summary>
         /// Add new singleton
@@ -247,7 +247,7 @@ namespace LiteEntitySystem
         /// <typeparam name="T">Entity type</typeparam>
         /// <returns>Created entity or null in case of limit</returns>
         public T AddSignleton<T>(Action<T> initMethod = null) where T : SingletonEntityLogic => 
-            Add(initMethod);
+            AddInternal(initMethod);
 
         /// <summary>
         /// Add new entity
@@ -256,7 +256,7 @@ namespace LiteEntitySystem
         /// <typeparam name="T">Entity type</typeparam>
         /// <returns>Created entity or null in case of limit</returns>
         public T AddEntity<T>(Action<T> initMethod = null) where T : EntityLogic => 
-            Add(initMethod);
+            AddInternal(initMethod);
         
         /// <summary>
         /// Add new entity and set parent entity
@@ -266,7 +266,7 @@ namespace LiteEntitySystem
         /// <typeparam name="T">Entity type</typeparam>
         /// <returns>Created entity or null in case of limit</returns>
         public T AddEntity<T>(EntityLogic parent, Action<T> initMethod = null) where T : EntityLogic =>
-            Add<T>(e =>
+            AddInternal<T>(e =>
             {
                 e.SetParent(parent);
                 initMethod?.Invoke(e);
@@ -548,7 +548,7 @@ namespace LiteEntitySystem
             _netPlayers.GetByIndex(0).Peer.TriggerSend();
         }
         
-        private T Add<T>(Action<T> initMethod) where T : InternalEntity
+        internal T AddInternal<T>(Action<T> initMethod, EntityCreationType creationType = EntityCreationType.FromServer) where T : InternalEntity
         {
             if (EntityClassInfo<T>.ClassId == 0)
                 throw new Exception($"Unregistered entity type: {typeof(T)}");
@@ -569,6 +569,7 @@ namespace LiteEntitySystem
                 entityId,
                 stateSerializer.NextVersion,
                 TotalTicksPassed,
+                creationType,
                 this));
             stateSerializer.Init(entity, _tick);
             initMethod?.Invoke(entity);
@@ -620,13 +621,18 @@ namespace LiteEntitySystem
             }
 
             if (SafeEntityUpdate)
+            {
                 foreach (var aliveEntity in AliveEntities)
-                    aliveEntity.SafeUpdate();
+                    if (!aliveEntity.IsDestroyed)
+                        aliveEntity.SafeUpdate();
+            }
             else
+            {
                 foreach (var aliveEntity in AliveEntities)
-                    aliveEntity.Update();
-       
-
+                    if (!aliveEntity.IsDestroyed)
+                        aliveEntity.Update();
+            }
+            
             foreach (var lagCompensatedEntity in LagCompensatedEntities)
                 lagCompensatedEntity.WriteHistory(_tick);
         }
@@ -634,13 +640,10 @@ namespace LiteEntitySystem
         internal override void RemoveEntity(InternalEntity e)
         {
             base.RemoveEntity(e);
-            if (!e.IsLocal)
-            {
-                _stateSerializers[e.Id].Destroy(_tick, PlayersCount == 0);
-                //destroy instantly when no players to free ids
-                if (PlayersCount == 0)
-                    _entityIdQueue.ReuseId(e.Id);
-            }
+            _stateSerializers[e.Id].Destroy(_tick, PlayersCount == 0);
+            //destroy instantly when no players to free ids
+            if (PlayersCount == 0)
+                _entityIdQueue.ReuseId(e.Id);
         }
 
         internal void EntityChanged(InternalEntity entity)

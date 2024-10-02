@@ -8,6 +8,7 @@ namespace LiteEntitySystem
         public readonly ushort Id;
         public readonly byte Version;
         public readonly int CreationTime;
+        public readonly EntityCreationType CreationType;
         public readonly EntityManager EntityManager;
 
         internal EntityParams(EntityDataHeader dataHeader, EntityManager entityManager)
@@ -16,6 +17,7 @@ namespace LiteEntitySystem
             Id = dataHeader.Id;
             Version = dataHeader.Version;
             CreationTime = dataHeader.CreationTick;
+            CreationType = dataHeader.CreationType;
             EntityManager = entityManager;
         }
         
@@ -24,6 +26,7 @@ namespace LiteEntitySystem
             ushort id,
             byte version,
             int creationTime,
+            EntityCreationType creationType,
             EntityManager entityManager)
         {
             ClassId = classId;
@@ -31,6 +34,7 @@ namespace LiteEntitySystem
             Version = version;
             CreationTime = creationTime;
             EntityManager = entityManager;
+            CreationType = creationType;
         }
     }
 }

@@ -1,7 +1,4 @@
 using System;
-using System.Collections;
-using System.Collections.Generic;
-using System.Runtime.CompilerServices;
 using LiteEntitySystem.Collections;
 using LiteEntitySystem.Internal;
 
@@ -64,12 +61,5 @@ namespace LiteEntitySystem
             OnDestroyed = null;
             base.Clear();
         }
-    }
-
-    public class EntityList<T> : EntityFilter<T> where T : InternalEntity
-    {
-        public new void Add(T entity) => base.Add(entity);
-        public new void Remove(T entity) => base.Remove(entity);
-        public new void Clear() => base.Clear();
     }
 }

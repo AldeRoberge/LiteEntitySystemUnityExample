@@ -121,7 +121,7 @@ namespace LiteEntitySystem
             }
         }
 
-        private readonly EntityFilter<InternalEntity> _predictedEntityFilter = new();
+        private readonly AVLTree<InternalEntity> _predictedEntityFilter = new();
         private readonly AbstractNetPeer _netPeer;
         private readonly Queue<ServerStateData> _statesPool = new(MaxSavedStateDiff);
         private readonly Dictionary<ushort, ServerStateData> _receivedStates = new();
@@ -129,10 +129,8 @@ namespace LiteEntitySystem
         private readonly Queue<InputCommand> _inputCommands = new (InputBufferSize);
         private readonly Queue<byte[]> _inputPool = new (InputBufferSize);
         private readonly Queue<(ushort tick, EntityLogic entity)> _spawnPredictedEntities = new ();
-        private readonly byte[][] _interpolatedInitialData = new byte[MaxEntityCount][];
-        private readonly byte[][] _interpolatePrevData = new byte[MaxEntityCount][];
-        private readonly byte[][] _predictedEntitiesData = new byte[MaxEntityCount][];
         private readonly byte[] _sendBuffer = new byte[NetConstants.MaxPacketSize];
+        private readonly IdGeneratorUShort _localIdQueue = new (MaxEntityCount+1, ushort.MaxValue);
 
         private ServerSendRate _serverSendRate;
         private ServerStateData _stateA;
@@ -210,9 +208,7 @@ namespace LiteEntitySystem
             _netPeer = netPeer;
             _sendBuffer[0] = headerByte;
             _sendBuffer[1] = InternalPackets.ClientInput;
-
-            AliveEntities.SubscribeToConstructed(OnAliveConstructed, false);
-
+            
             for (int i = 0; i < MaxSavedStateDiff; i++)
             {
                 _statesPool.Enqueue(new ServerStateData());
@@ -238,29 +234,24 @@ namespace LiteEntitySystem
                 headerByte,
                 framesPerSecond);
 
+        public override void Reset()
+        {
+            _localIdQueue.Reset();
+            base.Reset();
+        }
+
         internal override void RemoveEntity(InternalEntity e)
         {
             base.RemoveEntity(e);
-            if (_predictedEntityFilter.Contains(e))
-            {
-                _predictedEntitiesData[e.Id] = null;
-                _predictedEntityFilter.Remove(e);
-            }
+            _predictedEntityFilter.Remove(e);
         }
 
-        private unsafe void OnAliveConstructed(InternalEntity entity)
+        protected override unsafe void OnAliveEntityAdded(InternalEntity entity)
         {
             ref var classData = ref ClassDataDict[entity.ClassId];
 
-            if (classData.InterpolatedFieldsSize > 0)
-            {
-                Utils.ResizeOrCreate(ref _interpolatePrevData[entity.Id], classData.InterpolatedFieldsSize);
-                
-                //for local interpolated
-                Utils.ResizeOrCreate(ref _interpolatedInitialData[entity.Id], classData.InterpolatedFieldsSize);
-            }
-
-            fixed (byte* interpDataPtr = _interpolatedInitialData[entity.Id], prevDataPtr = _interpolatePrevData[entity.Id])
+            fixed (byte* interpDataPtr = classData.ClientInterpolatedNextData(entity),
+                   prevDataPtr = classData.ClientInterpolatedPrevData(entity))
             {
                 for (int i = 0; i < classData.InterpolatedCount; i++)
                 {
@@ -270,7 +261,7 @@ namespace LiteEntitySystem
                 }
             }
         }
-
+        
         /// Read incoming data
         /// <param name="inData">Incoming data including header byte</param>
         /// <returns>Deserialization result</returns>
@@ -472,7 +463,7 @@ namespace LiteEntitySystem
                 if(entity.IsRemoteControlled && !classData.HasRemoteRollbackFields)
                     continue;
 
-                fixed (byte* predictedData = _predictedEntitiesData[entity.Id])
+                fixed (byte* predictedData = classData.ClientPredictedData(entity))
                 {
                     for (int i = 0; i < classData.FieldsCount; i++)
                     {
@@ -520,7 +511,7 @@ namespace LiteEntitySystem
                 
                 foreach (var entity in AliveEntities)
                 {
-                    if(entity.IsLocal || !entity.IsLocalControlled)
+                    if(entity.CreationType == EntityCreationType.Predicted || !entity.IsLocalControlled)
                         continue;
                     entity.Update();
                 }
@@ -530,13 +521,13 @@ namespace LiteEntitySystem
             //update local interpolated position
             foreach (var entity in AliveEntities)
             {
-                if(entity.IsLocal || !entity.IsLocalControlled)
+                if(entity.CreationType == EntityCreationType.Predicted|| !entity.IsLocalControlled)
                     continue;
                 
                 ref readonly var classData = ref entity.ClassData;
                 for(int i = 0; i < classData.InterpolatedCount; i++)
                 {
-                    fixed (byte* currentDataPtr = _interpolatedInitialData[entity.Id])
+                    fixed (byte* currentDataPtr = classData.ClientInterpolatedNextData(entity))
                     {
                         ref var field = ref classData.Fields[i];
                         field.TypeProcessor.WriteTo(entity, field.Offset, currentDataPtr + field.FixedOffset);
@@ -549,6 +540,7 @@ namespace LiteEntitySystem
             {
                 if (Utils.SequenceDiff(_stateA.ProcessedTick, info.tick) >= 0)
                 {
+                    Logger.Log("Delete predicted");
                     _spawnPredictedEntities.Dequeue();
                     info.entity.DestroyInternal();
                 }
@@ -596,11 +588,11 @@ namespace LiteEntitySystem
             foreach (var entity in AliveEntities)
             {
                 ref var classData = ref ClassDataDict[entity.ClassId];
-                if (entity.IsLocal || entity.IsLocalControlled)
+                if (entity.CreationType == EntityCreationType.Predicted || entity.IsLocalControlled)
                 {
                     //save data for interpolation before update
-                    fixed (byte* currentDataPtr = _interpolatedInitialData[entity.Id],
-                           prevDataPtr = _interpolatePrevData[entity.Id])
+                    fixed (byte* currentDataPtr = classData.ClientInterpolatedNextData(entity),
+                           prevDataPtr = classData.ClientInterpolatedPrevData(entity))
                     {
                         //restore previous
                         for(int i = 0; i < classData.InterpolatedCount; i++)
@@ -662,7 +654,7 @@ namespace LiteEntitySystem
                 for(int i = 0; i < _stateB.InterpolatedCachesCount; i++)
                 {
                     ref var interpolatedCache = ref _stateB.InterpolatedCaches[i];
-                    fixed (byte* initialDataPtr = _interpolatedInitialData[interpolatedCache.Entity.Id], nextDataPtr = _stateB.Data)
+                    fixed (byte* initialDataPtr = interpolatedCache.Entity.ClassData.ClientInterpolatedNextData(interpolatedCache.Entity), nextDataPtr = _stateB.Data)
                         interpolatedCache.TypeProcessor.SetInterpolation(
                             interpolatedCache.Entity, 
                             interpolatedCache.FieldOffset,
@@ -676,11 +668,11 @@ namespace LiteEntitySystem
             float localLerpT = LerpFactor;
             foreach (var entity in AliveEntities)
             {
-                if (!entity.IsLocalControlled && !entity.IsLocal)
+                if (entity.IsRemoteControlled)
                     continue;
                 
                 ref readonly var classData = ref entity.ClassData;
-                fixed (byte* currentDataPtr = _interpolatedInitialData[entity.Id], prevDataPtr = _interpolatePrevData[entity.Id])
+                fixed (byte* currentDataPtr = classData.ClientInterpolatedNextData(entity), prevDataPtr = classData.ClientInterpolatedPrevData(entity))
                 {
                     for(int i = 0; i < classData.InterpolatedCount; i++)
                     {
@@ -770,7 +762,10 @@ namespace LiteEntitySystem
         {
             var flags = entity.ClassData.Flags;
             if (flags.HasFlagFast(EntityFlags.Updateable) && !flags.HasFlagFast(EntityFlags.UpdateOnClient))
+            {
                 AliveEntities.Add(entity);
+                OnAliveEntityAdded(entity);
+            }
         }
         
         internal void RemoveOwned(EntityLogic entity)
@@ -791,9 +786,10 @@ namespace LiteEntitySystem
 
             var entity = (T)classData.EntityConstructor(new EntityParams(
                classId,
-               LocalEntityId,
+               _localIdQueue.GetNewId(),
                0,
                TotalTicksPassed,
+               EntityCreationType.Predicted,
                this));
             entity.InternalOwnerId.Value = InternalPlayerId;
             initMethod?.Invoke(entity);
@@ -882,17 +878,25 @@ namespace LiteEntitySystem
                     } 
                     if (entity == null) //create new
                     {
+                        if (entityDataHeader.CreationType == EntityCreationType.PredictedVerified)
+                        {
+                            foreach ((ushort tick, EntityLogic predictedSpawnedEntity) in _spawnPredictedEntities)
+                            {
+                                if (predictedSpawnedEntity.ClassId == entityDataHeader.ClassId)
+                                {
+                                    entity = predictedSpawnedEntity;
+                                    entity.PromoteToRemote(entityDataHeader);
+                                    EntitiesDict[entity.Id] = entity;
+                                    break;
+                                }
+                            }
+                        }
                         entity = AddEntity(new EntityParams(entityDataHeader, this));
                         classData = ref entity.ClassData;
                         if (classData.PredictedSize > 0 || classData.SyncableFields.Length > 0)
                         {
-                            Utils.ResizeOrCreate(ref _predictedEntitiesData[entity.Id], classData.PredictedSize);
                             _predictedEntityFilter.Add(entity);
                             //Logger.Log($"Add predicted: {entity.GetType()}");
-                        }
-                        if (classData.InterpolatedFieldsSize > 0)
-                        {
-                            Utils.ResizeOrCreate(ref _interpolatedInitialData[entity.Id], classData.InterpolatedFieldsSize);
                         }
                         Utils.ResizeIfFull(ref _entitiesToConstruct, _entitiesToConstructCount);
                         _entitiesToConstruct[_entitiesToConstructCount++] = entity;
@@ -928,7 +932,7 @@ namespace LiteEntitySystem
                 Utils.ResizeOrCreate(ref _syncCallsBeforeConstruct, _syncCallsBeforeConstructCount + classData.FieldsCount);
                 
                 int fieldsFlagsOffset = readerPosition - classData.FieldsFlagsSize;
-                fixed (byte* interpDataPtr = _interpolatedInitialData[entity.Id], predictedData = _predictedEntitiesData[entity.Id])
+                fixed (byte* interpDataPtr = classData.ClientInterpolatedNextData(entity), predictedData = classData.ClientPredictedData(entity))
                     for (int i = 0; i < classData.FieldsCount; i++)
                     {
                         if (!fullSync && !Utils.IsBitSet(rawData + fieldsFlagsOffset, i))
@@ -978,9 +982,9 @@ namespace LiteEntitySystem
 
             bool IsEntityIdValid(ushort id)
             {
-                if (id == InvalidEntityId || id == LocalEntityId)
+                if (id == InvalidEntityId || id > MaxEntityCount)
                 {
-                    Logger.LogError($"Bad data (id == {InvalidEntityId} or Id == {LocalEntityId}) Id: {id}");
+                    Logger.LogError($"Bad data (id == {InvalidEntityId} or Id > {MaxEntityCount}) Id: {id}");
                     return false;
                 }
                 return true;

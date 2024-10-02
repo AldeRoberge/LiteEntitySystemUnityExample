@@ -34,10 +34,8 @@ namespace LiteEntitySystem
             //FNV1a 64 bit hash
             if (!_isFinished)
             {
-                //don't hash localonly types
                 foreach (var (entType, _) in RegisteredTypes
-                    .OrderBy(kv => kv.Value.ClassId)
-                    .Where(kv => !kv.Key.IsSubclassOf(typeof(LocalSingletonEntityLogic))))
+                    .OrderBy(kv => kv.Value.ClassId))
                 {
                     var allTypesStack = Utils.GetBaseTypes(entType, typeof(InternalEntity), true);
                     while(allTypesStack.Count > 0)

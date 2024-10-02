@@ -20,11 +20,7 @@ namespace LiteEntitySystem
         /// <summary>
         /// Sync entity only for owner player
         /// </summary>
-<<<<<<< HEAD
         OnlyForOwner = 1 << 2
-=======
-        OnlyForOwner = 1 << 3
->>>>>>> refs/remotes/origin/main
     }
     
     [AttributeUsage(AttributeTargets.Class)]
@@ -51,89 +47,37 @@ namespace LiteEntitySystem
         /// </summary>
         public HashSet<EntityLogic> Childs => _childsSet ??= new HashSet<EntityLogic>();
         private HashSet<EntityLogic> _childsSet;
-
+        
         public EntitySharedReference ParentId => _parentId;
         
-        private readonly byte[] _history;
-        private readonly EntityFieldInfo[] _lagCompensatedFields;
-        private readonly int _lagCompensatedSize;
-        private readonly int _lagCompensatedCount;
-        private int _filledHistory;
         private bool _lagCompensationEnabled;
-
-        public bool HasLagCompensation => _lagCompensatedSize > 0;
-
+        
         public EntitySharedReference SharedReference => new EntitySharedReference(this);
         
-        internal unsafe void WriteHistory(ushort tick)
-        {
-            byte maxHistory = (byte)EntityManager.MaxHistorySize;
-            _filledHistory = Math.Min(_filledHistory + 1, maxHistory);
-            int historyOffset = ((tick % maxHistory)+1)*_lagCompensatedSize;
-            fixed (byte* history = _history)
-            {
-                for (int i = 0; i < _lagCompensatedCount; i++)
-                {
-                    ref var field = ref _lagCompensatedFields[i];
-                    field.TypeProcessor.WriteTo(this, field.Offset, history + historyOffset);
-                    historyOffset += field.IntSize;
-                }
-            }
-        }
+        internal void WriteHistory(ushort tick) => ClassData.WriteHistory(this, tick);
         
         //on client it works only in rollback
-        internal unsafe void EnableLagCompensation(NetPlayer player)
+        internal void EnableLagCompensation(NetPlayer player)
         {
             if (_lagCompensationEnabled || InternalOwnerId.Value == player.Id)
                 return;
             ushort tick = EntityManager.IsClient ? ClientManager.ServerTick : EntityManager.Tick;
-            byte maxHistory = (byte)EntityManager.MaxHistorySize;
             if (Utils.SequenceDiff(player.StateATick, tick) >= 0 || Utils.SequenceDiff(player.StateBTick, tick) > 0)
             {
                 Logger.Log($"LagCompensationMiss. Tick: {tick}, StateA: {player.StateATick}, StateB: {player.StateBTick}");
                 return;
             }
-            int historyAOffset = ((player.StateATick % maxHistory)+1)*_lagCompensatedSize;
-            int historyBOffset = ((player.StateBTick % maxHistory)+1)*_lagCompensatedSize;
-            int historyCurrent = 0;
-
-            fixed (byte* history = _history)
-            {
-                for (int i = 0; i < _lagCompensatedCount; i++)
-                {
-                    ref var field = ref _lagCompensatedFields[i];
-                    field.TypeProcessor.LoadHistory(
-                        this, 
-                        field.Offset,
-                        history + historyCurrent,
-                        history + historyAOffset,
-                        history + historyBOffset,
-                        player.LerpTime);
-                    historyAOffset += field.IntSize;
-                    historyBOffset += field.IntSize;
-                    historyCurrent += field.IntSize;
-                }
-            }
-
+            ClassData.LoadHistroy(player, this);
             OnLagCompensationStart();
             _lagCompensationEnabled = true;
         }
 
-        internal unsafe void DisableLagCompensation()
+        internal void DisableLagCompensation()
         {
             if (!_lagCompensationEnabled)
                 return;
             _lagCompensationEnabled = false;
-            int historyOffset = 0;
-            fixed (byte* history = _history)
-            {
-                for (int i = 0; i < _lagCompensatedCount; i++)
-                {
-                    ref var field = ref _lagCompensatedFields[i];
-                    field.TypeProcessor.SetFrom(this, field.Offset, history + historyOffset);
-                    historyOffset += field.IntSize;
-                }
-            }
+            ClassData.UndoHistory(this);
             OnLagCompensationEnd();
         }
 
@@ -175,7 +119,7 @@ namespace LiteEntitySystem
                     return ServerManager.AddEntity(initMethod);
                 }
 
-                var predictedEntity = ServerManager.AddEntity(initMethod);
+                var predictedEntity = ServerManager.AddInternal(initMethod, EntityCreationType.PredictedVerified);
                 var player = ServerManager.GetPlayer(InternalOwnerId);
                 ushort playerServerTick = player.SimulatedServerTick;
                 while (playerServerTick != ServerManager.Tick)
@@ -242,10 +186,6 @@ namespace LiteEntitySystem
             if (IsDestroyed)
                 return;
             base.DestroyInternal();
-            if (EntityManager.IsClient && IsLocalControlled && !IsLocal)
-            {
-                ClientManager.RemoveOwned(this);
-            }
             var parent = EntityManager.GetEntityById<EntityLogic>(_parentId);
             if (parent != null && !parent.IsDestroyed && parent._childsSet != null)
             {
@@ -260,9 +200,12 @@ namespace LiteEntitySystem
         
         private void OnOwnerChange(byte prevOwner)
         {
-            if(IsLocalControlled && !IsLocal)
+            if (CreationType == EntityCreationType.Predicted)
+                return;
+                
+            if(IsLocalControlled)
                 ClientManager.AddOwned(this);
-            else if(prevOwner == EntityManager.InternalPlayerId && !IsLocal)
+            else if(prevOwner == EntityManager.InternalPlayerId)
                 ClientManager.RemoveOwned(this);
         }
 
@@ -293,14 +236,7 @@ namespace LiteEntitySystem
         
         protected EntityLogic(EntityParams entityParams) : base(entityParams)
         {
-            ref readonly var classData = ref ClassData;
-            _lagCompensatedSize = classData.LagCompensatedSize;
-            if (_lagCompensatedSize > 0)
-            {
-                _history = new byte[((byte)EntityManager.MaxHistorySize+1) * _lagCompensatedSize];
-                _lagCompensatedFields = classData.LagCompensatedFields;
-                _lagCompensatedCount = classData.LagCompensatedCount;
-            }
+
         }
     }
 }
