@@ -128,7 +128,7 @@ namespace LiteEntitySystem.Internal
 
         internal void PromoteToRemote(EntityDataHeader dataHeader)
         {
-            Logger.Log("Promoted to remote entity");
+            //Logger.Log("Promoted to remote entity");
             UpdateOrderNum = dataHeader.UpdateOrder;
             CreationType = EntityCreationType.PredictedVerified;
             Id = dataHeader.Id;

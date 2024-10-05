@@ -889,12 +889,20 @@ namespace LiteEntitySystem
                                 predictedSpawnedEntity.CreatedTick == entityDataHeader.CreatedTick)
                             {
                                 entity = predictedSpawnedEntity;
+                                bool needToUpdateTrees = AliveEntities.Remove(entity);
                                 entity.PromoteToRemote(entityDataHeader);
+                                if(needToUpdateTrees)
+                                    AliveEntities.Add(entity);
                                 EntitiesDict[entity.Id] = entity;
                                 classData = ref ClassDataDict[entity.ClassId];
                                 _spawnPredictedEntities.Remove(predictedSpawnedEntity);
                                 break;
                             }
+                        }
+
+                        if (entity == null)
+                        {
+                            Logger.LogWarning("Predicted verified but not found?");
                         }
                     }
                     //if predicted not found
