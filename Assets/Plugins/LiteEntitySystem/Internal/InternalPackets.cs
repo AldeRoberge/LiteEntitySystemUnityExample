@@ -36,7 +36,7 @@ namespace LiteEntitySystem.Internal
     {
         public ushort StateA;
         public ushort StateB;
-        public float LerpMsec;
+        public float LerpMsec; 
         public static readonly unsafe int Size = sizeof(InputPacketHeader);
     }
 

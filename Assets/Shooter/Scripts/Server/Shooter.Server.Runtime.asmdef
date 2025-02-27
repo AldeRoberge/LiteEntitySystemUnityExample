@@ -1,0 +1,19 @@
+{
+  "name": "Shooter.Server.Runtime",
+  "rootNamespace": "",
+  "references": [
+    "GUID:cb5d873b8953a58458cde8d58858d96c",
+    "GUID:a8becc4901d08dd42b17d909a3b5e15e",
+    "GUID:e59c7b8783ae3414ab5084cf5aab4d84",
+    "GUID:9d12953d290ed43218520fde6f01f004"
+  ],
+  "includePlatforms": [],
+  "excludePlatforms": [],
+  "allowUnsafeCode": false,
+  "overrideReferences": false,
+  "precompiledReferences": [],
+  "autoReferenced": true,
+  "defineConstraints": [],
+  "versionDefines": [],
+  "noEngineReferences": false
+}

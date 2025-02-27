@@ -281,65 +281,68 @@ namespace LiteEntitySystem.Internal
                     RefMagic.CopyBlock(resultData + position, lastEntityData, _fullDataSize);
                 position += (int)_fullDataSize;
             } 
-            else fixed (byte* lastEntityData = _latestEntityData) //make diff
+            else
             {
-                //skip diff sync if disabled
-                if (playerController != null && playerController.IsEntityDiffSyncDisabled(new EntitySharedReference(_entity.Id, _entity.Version)))
+                fixed (byte* lastEntityData = _latestEntityData) //make diff
                 {
-                    position = startPos;
-                    return false;
-                }
+                    //skip diff sync if disabled
+                    if (playerController != null && playerController.IsEntityDiffSyncDisabled(new EntitySharedReference(_entity.Id, _entity.Version)))
+                    {
+                        position = startPos;
+                        return false;
+                    }
                 
-                byte* entityDataAfterHeader = lastEntityData + HeaderSize;
-                // -1 for cycle
-                byte* fields = resultData + startPos + DiffHeaderSize - 1;
-                //put entity id at 2
-                *(ushort*)(resultData + position) = *(ushort*)lastEntityData;
-                *fieldFlagAndSize = 0;
-                position += sizeof(ushort) + _fieldsFlagsSize;
-                int positionBeforeDeltaCompression = position;
+                    byte* entityDataAfterHeader = lastEntityData + HeaderSize;
+                    // -1 for cycle
+                    byte* fields = resultData + startPos + DiffHeaderSize - 1;
+                    //put entity id at 2
+                    *(ushort*)(resultData + position) = *(ushort*)lastEntityData;
+                    *fieldFlagAndSize = 0;
+                    position += sizeof(ushort) + _fieldsFlagsSize;
+                    int positionBeforeDeltaCompression = position;
 
-                //write fields
-                for (int i = 0; i < _fieldsCount; i++)
-                {
-                    if (i % 8 == 0)
+                    //write fields
+                    for (int i = 0; i < _fieldsCount; i++)
                     {
-                        fields++;
-                        *fields = 0;
-                    }
+                        if (i % 8 == 0)
+                        {
+                            fields++;
+                            *fields = 0;
+                        }
                     
-                    //skip very old and increase tick to wrap
-                    if (Utils.SequenceDiff(_fieldChangeTicks[i], minimalTick) < 0)
-                    {
-                        _fieldChangeTicks[i] = minimalTick;
-                        continue;
-                    }
+                        //skip very old and increase tick to wrap
+                        if (Utils.SequenceDiff(_fieldChangeTicks[i], minimalTick) < 0)
+                        {
+                            _fieldChangeTicks[i] = minimalTick;
+                            continue;
+                        }
                     
-                    //not actual
-                    if (Utils.SequenceDiff(_fieldChangeTicks[i], playerTick) <= 0)
-                    {
-                        //Logger.Log($"SkipOld: {field.Name}");
-                        //old data
-                        continue;
+                        //not actual
+                        if (Utils.SequenceDiff(_fieldChangeTicks[i], playerTick) <= 0)
+                        {
+                            //Logger.Log($"SkipOld: {field.Name}");
+                            //old data
+                            continue;
+                        }
+
+                        ref var field = ref _fields[i];
+                        if (((field.Flags & SyncFlags.OnlyForOwner) != 0 && !isOwned) || 
+                            ((field.Flags & SyncFlags.OnlyForOtherPlayers) != 0 && isOwned))
+                        {
+                            //Logger.Log($"SkipSync: {field.Name}, isOwned: {isOwned}");
+                            continue;
+                        }
+                    
+                        *fields |= (byte)(1 << i % 8);
+                        RefMagic.CopyBlock(resultData + position, entityDataAfterHeader + field.FixedOffset, field.Size);
+                        position += field.IntSize;
+                        //Logger.Log($"WF {_entity.GetType()} f: {_classData.Fields[i].Name}");
                     }
 
-                    ref var field = ref _fields[i];
-                    if (((field.Flags & SyncFlags.OnlyForOwner) != 0 && !isOwned) || 
-                        ((field.Flags & SyncFlags.OnlyForOtherPlayers) != 0 && isOwned))
-                    {
-                        //Logger.Log($"SkipSync: {field.Name}, isOwned: {isOwned}");
-                        continue;
-                    }
-                    
-                    *fields |= (byte)(1 << i % 8);
-                    RefMagic.CopyBlock(resultData + position, entityDataAfterHeader + field.FixedOffset, field.Size);
-                    position += field.IntSize;
-                    //Logger.Log($"WF {_entity.GetType()} f: {_classData.Fields[i].Name}");
+                    hasChanges = position > positionBeforeDeltaCompression;
                 }
-
-                hasChanges = position > positionBeforeDeltaCompression;
             }
-            
+
             //add RPCs count
             ushort* rpcCount = (ushort*)(resultData + position);
             *rpcCount = 0;

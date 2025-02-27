@@ -299,9 +299,13 @@ namespace LiteEntitySystem.Collections
             ref var node = ref nodes[nodeIdx];
             int cmp = data.CompareTo(node.Data);
             if (cmp < 0)
+            {
                 node.LeftId = DeleteNode(node.LeftId, data);
+            }
             else if (cmp > 0)
+            {
                 node.RightId = DeleteNode(node.RightId, data);
+            }
             else
             {
                 if (node.LeftId == EmptyNode || node.RightId == EmptyNode)

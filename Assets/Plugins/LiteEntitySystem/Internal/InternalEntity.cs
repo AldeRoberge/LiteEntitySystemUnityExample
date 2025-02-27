@@ -272,7 +272,9 @@ namespace LiteEntitySystem.Internal
                 ServerManager.AddRemoteCall(this, rpc.Id, rpc.Flags);
             }
             else if (rpc.Flags.HasFlagFast(ExecuteFlags.ExecuteOnPrediction) && IsLocalControlled)
+            {
                 rpc.CachedAction(this);
+            }
         }
 
         protected void ExecuteRPC<T>(in RemoteCall<T> rpc, T value) where T : unmanaged
@@ -289,7 +291,9 @@ namespace LiteEntitySystem.Internal
                 }
             }
             else if (rpc.Flags.HasFlagFast(ExecuteFlags.ExecuteOnPrediction) && IsLocalControlled)
+            {
                 rpc.CachedAction(this, value);
+            }
         }
 
         protected void ExecuteRPC<T>(in RemoteCallSpan<T> rpc, ReadOnlySpan<T> value) where T : unmanaged
@@ -303,7 +307,9 @@ namespace LiteEntitySystem.Internal
                 ServerManager.AddRemoteCall(this, value, rpc.Id, rpc.Flags);
             }
             else if (rpc.Flags.HasFlagFast(ExecuteFlags.ExecuteOnPrediction) && IsLocalControlled)
+            {
                 rpc.CachedAction(this, value);
+            }
         }
 
         protected void ExecuteRPC<T>(in RemoteCallSerializable<T> rpc, T value) where T : struct, ISpanSerializable
@@ -319,7 +325,9 @@ namespace LiteEntitySystem.Internal
                 ServerManager.AddRemoteCall<byte>(this, writer.RawData.Slice(0, writer.Position), rpc.Id, rpc.Flags);
             }
             else if (rpc.Flags.HasFlagFast(ExecuteFlags.ExecuteOnPrediction) && IsLocalControlled)
+            {
                 rpc.CachedAction(this, value);
+            }
         }
 
         protected InternalEntity(EntityParams entityParams)

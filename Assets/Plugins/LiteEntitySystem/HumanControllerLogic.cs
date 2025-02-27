@@ -160,7 +160,10 @@ namespace LiteEntitySystem
                 _firstFullInput = new byte[InputSize];
             }
             else
+            {
                 _awaitingRequests = new Dictionary<ushort, Action<bool>>();
+            }
+
             _requestWriter.Put(EntityManager.HeaderByte);
             _requestWriter.Put(InternalPackets.ClientRequest);
             _requestWriter.Put(entityParams.Header.Id);

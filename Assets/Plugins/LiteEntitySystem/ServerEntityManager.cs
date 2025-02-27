@@ -306,7 +306,7 @@ namespace LiteEntitySystem
             }
             
             ushort clientTick = BitConverter.ToUInt16(inData);
-            inData = inData.Slice(2);
+            inData = inData[2..];
             bool isFirstInput = true;
             while (inData.Length >= InputPacketHeader.Size)
             {
@@ -494,7 +494,9 @@ namespace LiteEntitySystem
             {
                 var player = _netPlayers.GetByIndex(pidx);
                 if (player.State != NetPlayerState.RequestBaseline)
+                {
                     _minimalTick = Utils.SequenceDiff(player.StateATick, _minimalTick) < 0 ? player.StateATick : _minimalTick;
+                }
                 else if (maxBaseline == 0)
                 {
                     maxBaseline = sizeof(BaselineDataHeader);

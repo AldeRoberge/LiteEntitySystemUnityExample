@@ -1,0 +1,17 @@
+{
+    "name": "Shooter.Shared.Runtime",
+    "rootNamespace": "",
+    "references": [
+        "GUID:e59c7b8783ae3414ab5084cf5aab4d84",
+        "GUID:9d12953d290ed43218520fde6f01f004"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": true,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
