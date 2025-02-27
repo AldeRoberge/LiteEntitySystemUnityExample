@@ -12,7 +12,7 @@ namespace Shooter.Scripts.Client
         public void Init(PistolBulletProjectile e) => e.Init(Player, Position, Speed);
     }
 
-    [EntityFlags(EntityFlags.Updateable)]
+    [EntityFlags(EntityFlags.UpdateOnClient)]
     public class PistolBulletProjectile : EntityLogic
     {
         private static readonly RaycastHit2D[] RaycastHits = new RaycastHit2D[10];
@@ -24,19 +24,23 @@ namespace Shooter.Scripts.Client
         public SyncVar<EntitySharedReference> ShooterPlayer;
         public SyncVar<bool>                  HitSomething;
 
-        private UnityPhysicsManager _physicsManager;
-        public  GameObject          GameObject;
+        private UnityPhysicsManager _unityPhys;
+        public  GameObject          UnityObject;
 
         private float _lifeTime = 2f;
 
+        public PistolBulletProjectile(EntityParams entityParams) : base(entityParams)
+        {
+        }
+
         protected override void OnConstructed()
         {
-            _physicsManager = EntityManager.GetSingleton<UnityPhysicsManager>();
+            _unityPhys = EntityManager.GetSingleton<UnityPhysicsManager>();
             if (IsClient)
             {
                 var prefab = Resources.Load<GameObject>("ProjectileClient");
-                GameObject = Object.Instantiate(prefab, Position.Value, Quaternion.identity, _physicsManager.Root);
-                GameObject.name = $"Projectile_{Id}";
+                UnityObject = Object.Instantiate(prefab, Position.Value, Quaternion.identity, _unityPhys.Root);
+                UnityObject.name = $"Projectile_{Id}";
             }
         }
 
@@ -44,13 +48,10 @@ namespace Shooter.Scripts.Client
         {
             if (IsClient && !IsLocal && !HitSomething)
                 ClientLogic.Instance.SpawnHit(Position);
-            if (GameObject != null)
-                Object.Destroy(GameObject);
+            if (UnityObject != null)
+                Object.Destroy(UnityObject);
         }
 
-        public PistolBulletProjectile(EntityParams entityParams) : base(entityParams)
-        {
-        }
 
         public void Init(EntitySharedReference player, Vector2 position, Vector2 speed)
         {
@@ -67,24 +68,22 @@ namespace Shooter.Scripts.Client
                 return;
 
             EnableLagCompensationForOwner();
-            int hitsCount = _physicsManager.PhysicsScene.Raycast(
+            int hitsCount = _unityPhys.PhysicsScene.Raycast(
                 Position,
                 Speed.Value.normalized,
                 Speed.Value.magnitude * EntityManager.DeltaTimeF,
                 RaycastHits);
             DisableLagCompensationForOwner();
 
-            for (var i = 0; i < hitsCount; i++)
+            for (int i = 0; i < hitsCount; i++)
             {
                 ref var hit = ref RaycastHits[i];
-
                 if (hit.transform.TryGetComponent<BasePlayerView>(out var playerProxy) && playerProxy.AttachedPlayer.SharedReference != ShooterPlayer)
                 {
                     playerProxy.AttachedPlayer.Damage(25);
                     if (EntityManager.IsClient && EntityManager.InNormalState)
                         ClientLogic.Instance.SpawnHit(Position);
-                    
-                    GameObject?.SetActive(false);
+                    UnityObject?.SetActive(false);
                     HitSomething.Value = true;
                     break;
                 }
@@ -99,7 +98,7 @@ namespace Shooter.Scripts.Client
 
         protected override void VisualUpdate()
         {
-            GameObject.transform.position = Position.Value;
+            UnityObject.transform.position = Position.Value;
         }
     }
 }
