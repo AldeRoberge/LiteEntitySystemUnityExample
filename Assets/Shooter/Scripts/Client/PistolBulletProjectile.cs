@@ -63,7 +63,7 @@ namespace Shooter.Scripts.Client
         {
             //skip IsRemoteControlled because EntityFlags.UpdateOnClient
             //but EntityFlags.UpdateOnClient needed for VisualUpdate
-            if (HitSomething || IsRemoteControlled)
+            if (HitSomething || (IsClient && IsRemoteControlled))
                 return;
 
             EnableLagCompensationForOwner();
