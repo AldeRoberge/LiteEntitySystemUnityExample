@@ -1,4 +1,5 @@
 using LiteEntitySystem;
+using Shooter.Scripts.Shared;
 using UnityEngine;
 
 namespace Shooter.Scripts.Client
